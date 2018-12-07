@@ -61,7 +61,7 @@ VulkanApplication::VulkanApplication(
     const VkPhysicalDeviceFeatures& features, uint32_t host_buffer_size,
     uint32_t device_image_size, uint32_t device_buffer_size,
     uint32_t coherent_buffer_size, bool use_async_compute_queue,
-    bool use_sparse_binding)
+    bool use_sparse_binding, bool use_device_group)
     : allocator_(allocator),
       log_(log),
       entry_data_(entry_data),
@@ -71,11 +71,18 @@ VulkanApplication::VulkanApplication(
       render_queue_index_(0u),
       present_queue_index_(0u),
       library_wrapper_(allocator_, log_),
-      instance_(CreateInstanceForApplication(allocator_, &library_wrapper_,
-                                             entry_data_)),
+      instance_(!use_device_group
+                    ? CreateInstanceForApplication(
+                          allocator_, &library_wrapper_, entry_data_)
+                    : Create11InstanceForApplication(
+                          allocator_, &library_wrapper_, entry_data_)),
       surface_(CreateDefaultSurface(&instance_, entry_data_)),
-      device_(CreateDevice(extensions, features, use_async_compute_queue,
-                           use_sparse_binding)),
+      device_(!use_device_group
+                  ? CreateDevice(extensions, features, use_async_compute_queue,
+                                 use_sparse_binding)
+                  : CreateDeviceGroup(extensions, features,
+                                      use_async_compute_queue,
+                                      use_sparse_binding)),
       swapchain_(CreateDefaultSwapchain(&instance_, &device_, &surface_,
                                         allocator_, render_queue_index_,
                                         present_queue_index_, entry_data_)),
@@ -110,7 +117,8 @@ VulkanApplication::VulkanApplication(
           // image size is 100x100, and the format is rgba
           std::ofstream ppm;
           ppm.open(d->file_name);
-          ppm << "P6 " << d->dat->width() << " " << d->dat->height() << " 255\n";
+          ppm << "P6 " << d->dat->width() << " " << d->dat->height()
+              << " 255\n";
 
           for (size_t i = 0; i < size; ++i) {
             if (i % 4 == 3) continue;
@@ -244,21 +252,9 @@ VulkanApplication::VulkanApplication(
   }
 }
 
-VkDevice VulkanApplication::CreateDevice(
-    const std::initializer_list<const char*> extensions,
-    const VkPhysicalDeviceFeatures& features, bool create_async_compute_queue,
-    bool use_sparse_binding) {
-  // Since this is called by the constructor be careful not to
-  // use any data other than what has already been initialized.
-  // allocator_, log_, entry_data_, library_wrapper_, instance_,
-  // surface_
-
-  vulkan::VkDevice device(vulkan::CreateDeviceForSwapchain(
-      allocator_, &instance_, &surface_, &render_queue_index_,
-      &present_queue_index_, extensions, features,
-      entry_data_->prefer_separate_present(),
-      create_async_compute_queue ? &compute_queue_index_ : nullptr,
-      use_sparse_binding ? &sparse_binding_queue_index_ : nullptr));
+VkDevice VulkanApplication::SetupDevice(VkDevice device,
+                                        bool create_async_compute_queue,
+                                        bool use_sparse_binding) {
   if (device.is_valid()) {
     if (render_queue_index_ == present_queue_index_) {
       render_queue_concrete_ = containers::make_unique<VkQueue>(
@@ -299,8 +295,42 @@ VkDevice VulkanApplication::CreateDevice(
   return std::move(device);
 }
 
+VkDevice VulkanApplication::CreateDeviceGroup(
+    const std::initializer_list<const char*> extensions,
+    const VkPhysicalDeviceFeatures& features, bool create_async_compute_queue,
+    bool use_sparse_binding) {
+  vulkan::VkDevice device(vulkan::CreateDeviceGroupForSwapchain(
+      allocator_, &instance_, &surface_, &render_queue_index_,
+      &present_queue_index_, extensions, features,
+      entry_data_->prefer_separate_present(),
+      create_async_compute_queue ? &compute_queue_index_ : nullptr,
+      use_sparse_binding ? &sparse_binding_queue_index_ : nullptr));
+  return SetupDevice(std::move(device), create_async_compute_queue,
+                     use_sparse_binding);
+}
+
+VkDevice VulkanApplication::CreateDevice(
+    const std::initializer_list<const char*> extensions,
+    const VkPhysicalDeviceFeatures& features, bool create_async_compute_queue,
+    bool use_sparse_binding) {
+  // Since this is called by the constructor be careful not to
+  // use any data other than what has already been initialized.
+  // allocator_, log_, entry_data_, library_wrapper_, instance_,
+  // surface_
+
+  vulkan::VkDevice device(vulkan::CreateDeviceForSwapchain(
+      allocator_, &instance_, &surface_, &render_queue_index_,
+      &present_queue_index_, extensions, features,
+      entry_data_->prefer_separate_present(),
+      create_async_compute_queue ? &compute_queue_index_ : nullptr,
+      use_sparse_binding ? &sparse_binding_queue_index_ : nullptr));
+
+  return SetupDevice(std::move(device), create_async_compute_queue,
+                     use_sparse_binding);
+}
+
 containers::unique_ptr<VulkanApplication::Image>
-VulkanApplication::CreateAndBindImage(const VkImageCreateInfo* create_info) {
+VulkanApplication::CreateAndBindImage(const VkImageCreateInfo* create_info, uint32_t device_mask) {
   ::VkImage image;
   LOG_ASSERT(==, log_,
              device_->vkCreateImage(device_, create_info, nullptr, &image),
@@ -314,13 +344,42 @@ VulkanApplication::CreateAndBindImage(const VkImageCreateInfo* create_info) {
   AllocationToken* token = device_only_image_heap_->AllocateMemory(
       requirements.size, requirements.alignment, &memory, &offset, nullptr);
 
-  device_->vkBindImageMemory(device_, image, memory, offset);
+  if (device_.num_devices() > 1) {
+    uint32_t indices[VK_MAX_DEVICE_GROUP_SIZE];
+    uint32_t nindices = 0;
+    if (device_mask != 0) {
+      int32_t x = 0;
+      for (uint32_t i = 0; device_mask != 0; (device_mask <<= 1), ++i) {
+        if (device_mask & 0x1) {
+          indices[x++] = i;
+        }
+      }
+      nindices = x;
+    } else {
+      for (uint32_t i = 0; i < device_.num_devices(); ++i) {
+        indices[i] = i;
+      }
+      nindices = device_.num_devices();
+    }
+    VkBindImageMemoryDeviceGroupInfo group_info{
+        VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_DEVICE_GROUP_INFO,
+        nullptr,
+        nindices,
+        &indices[0],
+        0,
+        nullptr};
+    VkBindImageMemoryInfo bind_info{VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+                                    &group_info, image, memory, offset};
+    device_->vkBindImageMemory2(device_, 1, &bind_info);
+  } else {
+    device_->vkBindImageMemory(device_, image, memory, offset);
+  }
 
   // We have to do it this way because Image is private and friended,
   // so we cannot go through make_unique.
   Image* img = new (allocator_->malloc(sizeof(Image)))
       Image(device_only_image_heap_.get(), token,
-            VkImage(image, nullptr, &device_), create_info->format);
+            VkImage(image, nullptr, &device_), create_info->format, device_mask);
 
   return containers::unique_ptr<Image>(
       img, containers::UniqueDeleter(allocator_, sizeof(Image)));
@@ -328,7 +387,7 @@ VulkanApplication::CreateAndBindImage(const VkImageCreateInfo* create_info) {
 
 containers::unique_ptr<VulkanApplication::SparseImage>
 VulkanApplication::CreateAndBindSparseImage(
-    const VkImageCreateInfo* create_info, size_t slice_size) {
+    const VkImageCreateInfo* create_info, size_t slice_size, uint32_t device_mask) {
   LOG_ASSERT(!=, log_, create_info->flags && VK_IMAGE_CREATE_SPARSE_BINDING_BIT,
              0u);
   LOG_ASSERT(==, log_, sparse_binding_queue_ != nullptr, true);
@@ -412,7 +471,8 @@ containers::unique_ptr<VkImageView> VulkanApplication::CreateImageView(
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindBuffer(VulkanArena* heap,
-                                       const VkBufferCreateInfo* create_info) {
+                                       const VkBufferCreateInfo* create_info,
+                                       uint32_t device_mask) {
   ::VkBuffer buffer;
   LOG_ASSERT(==, log_,
              device_->vkCreateBuffer(device_, create_info, nullptr, &buffer),
@@ -428,31 +488,59 @@ VulkanApplication::CreateAndBindBuffer(VulkanArena* heap,
       heap->AllocateMemory(requirements.size, requirements.alignment, &memory,
                            &offset, &base_address);
 
-  device_->vkBindBufferMemory(device_, buffer, memory, offset);
+  if (device_.num_devices() > 1) {
+    uint32_t indices[VK_MAX_DEVICE_GROUP_SIZE];
+    uint32_t nindices = 0;
+    if (device_mask != 0) {
+      int32_t x = 0;
+      for (uint32_t i = 0; device_mask != 0; (device_mask <<= 1), ++i) {
+        if (device_mask & 0x1) {
+          indices[x++] = i;
+        }
+      }
+      nindices = x;
+    } else {
+      for (uint32_t i = 0; i < device_.num_devices(); ++i) {
+        indices[i] = i;
+      }
+      nindices = device_.num_devices();
+    }
+    VkBindBufferMemoryDeviceGroupInfo group_info{
+        VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_DEVICE_GROUP_INFO,
+        nullptr,
+        device_.num_devices(),
+        &indices[0]};
+    VkBindBufferMemoryInfo bind_info{VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
+                                     &group_info, buffer, memory, offset};
+    device_->vkBindBufferMemory2(device_, 1, &bind_info);
+  } else {
+    device_->vkBindBufferMemory(device_, buffer, memory, offset);
+  }
 
   Buffer* buff = new (allocator_->malloc(sizeof(Buffer))) Buffer(
       heap, token, VkBuffer(buffer, nullptr, &device_), base_address, device_,
       memory, offset, requirements.size, &(device_->vkFlushMappedMemoryRanges),
-      &(device_->vkInvalidateMappedMemoryRanges));
+      &(device_->vkInvalidateMappedMemoryRanges), device_mask);
   return containers::unique_ptr<Buffer>(
       buff, containers::UniqueDeleter(allocator_, sizeof(Buffer)));
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindHostBuffer(
-    const VkBufferCreateInfo* create_info) {
-  return CreateAndBindBuffer(host_accessible_heap_.get(), create_info);
+    const VkBufferCreateInfo* create_info, uint32_t device_mask) {
+  return CreateAndBindBuffer(host_accessible_heap_.get(), create_info,
+                             device_mask);
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindCoherentBuffer(
-    const VkBufferCreateInfo* create_info) {
-  return CreateAndBindBuffer(coherent_heap_.get(), create_info);
+    const VkBufferCreateInfo* create_info, uint32_t device_mask) {
+  return CreateAndBindBuffer(coherent_heap_.get(), create_info, device_mask);
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindDefaultExclusiveHostBuffer(
-    VkDeviceSize size, VkBufferUsageFlags usages) {
+    VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask) {
   VkBufferCreateInfo create_info{
       /* sType = */ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       /* pNext = */ nullptr,
@@ -463,12 +551,12 @@ VulkanApplication::CreateAndBindDefaultExclusiveHostBuffer(
       /* queueFamilyIndexCount = */ 0,
       /* pQueueFamilyIndices = */ nullptr,
   };
-  return CreateAndBindHostBuffer(&create_info);
+  return CreateAndBindHostBuffer(&create_info, device_mask);
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindDefaultExclusiveCoherentBuffer(
-    VkDeviceSize size, VkBufferUsageFlags usages) {
+    VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask) {
   VkBufferCreateInfo create_info{
       /* sType = */ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       /* pNext = */ nullptr,
@@ -479,18 +567,19 @@ VulkanApplication::CreateAndBindDefaultExclusiveCoherentBuffer(
       /* queueFamilyIndexCount = */ 0,
       /* pQueueFamilyIndices = */ nullptr,
   };
-  return CreateAndBindCoherentBuffer(&create_info);
+  return CreateAndBindCoherentBuffer(&create_info, device_mask);
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindDeviceBuffer(
-    const VkBufferCreateInfo* create_info) {
-  return CreateAndBindBuffer(device_only_buffer_heap_.get(), create_info);
+    const VkBufferCreateInfo* create_info, uint32_t device_mask) {
+  return CreateAndBindBuffer(device_only_buffer_heap_.get(), create_info,
+                             device_mask);
 }
 
 containers::unique_ptr<VulkanApplication::Buffer>
 VulkanApplication::CreateAndBindDefaultExclusiveDeviceBuffer(
-    VkDeviceSize size, VkBufferUsageFlags usages) {
+    VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask) {
   VkBufferCreateInfo create_info{
       /* sType = */ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       /* pNext = */ nullptr,
@@ -501,7 +590,7 @@ VulkanApplication::CreateAndBindDefaultExclusiveDeviceBuffer(
       /* queueFamilyIndexCount = */ 0,
       /* pQueueFamilyIndices = */ nullptr,
   };
-  return CreateAndBindDeviceBuffer(&create_info);
+  return CreateAndBindDeviceBuffer(&create_info, device_mask);
 }
 
 containers::unique_ptr<VkBufferView> VulkanApplication::CreateBufferView(
@@ -683,9 +772,11 @@ void VulkanApplication::FillSmallBuffer(Buffer* buffer, const void* data,
       data_size};
 
   (*command_buffer)
-      ->vkCmdPipelineBarrier(*command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_HOST_BIT,
-                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
-                             1, &barrier, 0, nullptr);
+      ->vkCmdPipelineBarrier(
+          *command_buffer,
+          VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &barrier, 0,
+          nullptr);
 }
 
 void VulkanApplication::FillHostVisibleBuffer(Buffer* buffer, const void* data,
@@ -869,10 +960,22 @@ VulkanArena::VulkanArena(containers::Allocator* allocator, logging::Logger* log,
       unmap_memory_function_(nullptr),
       memory_(VK_NULL_HANDLE, nullptr, device),
       log_(log) {
+  void* pNext = nullptr;
+  VkMemoryAllocateFlagsInfo flags = {
+      VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, nullptr,
+      VK_MEMORY_ALLOCATE_DEVICE_MASK_BIT, 0};
+
+  if (device->num_devices() > 1) {
+    pNext = &flags;
+    for (size_t i = 0; i < device->num_devices(); ++i) {
+      flags.deviceMask |= 1 << i;
+    }
+  }
+
   // Actually allocate the bytes for this heap.
   VkMemoryAllocateInfo allocate_info{
       VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,  // sType
-      nullptr,                                 // pNext
+      pNext,                                   // pNext
       buffer_size,                             // allocationSize
       memory_type_index};
 

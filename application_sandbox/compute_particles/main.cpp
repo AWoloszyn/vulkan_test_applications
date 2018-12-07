@@ -75,7 +75,7 @@ int main_entry(const entry::EntryData* data) {
   vulkan::VulkanApplication app(data->allocator(), data->logger(), data, {},
                                 VkPhysicalDeviceFeatures{}, 1024 * 1024 * 128,
                                 1024 * 1024 * 128, 1024 * 1024 * 128,
-                                1024 * 1024 * 128);
+                                1024 * 1024 * 128, false, false, true);
   // So we don't have to type app.device every time.
   vulkan::VkDevice& device = app.device();
   vulkan::VkQueue& render_queue = app.render_queue();
@@ -555,7 +555,7 @@ int main_entry(const entry::EntryData* data) {
     last_update_time = current_time;
 
     update_time_data->data()[0] = static_cast<float>(current_frame);
-    update_time_data->data()[1] = elapsed_time.count();
+    update_time_data->data()[1] = elapsed_time.count() * 2.0f;
     if (++current_frame >= TOTAL_PARTICLES) {
       current_frame = 0;
     }
@@ -564,9 +564,9 @@ int main_entry(const entry::EntryData* data) {
           current_time - last_print_time);
       last_print_time = current_time;
 
-      // data->logger()->LogInfo("Frame time: ", (double)t.count() /
-      // (double)1000,
-      //                        "ms");
+       data->logger()->LogInfo("Frame time: ", (double)t.count() /
+       (double)1000,
+                              "ms");
     }
     update_time_data->UpdateBuffer(&app.render_queue(), i);
 

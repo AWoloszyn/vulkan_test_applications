@@ -304,7 +304,7 @@ class VulkanApplication {
   // The Image class holds onto a VkImage as well as memory that is bound to it.
   // When it is destroyed, it will return the memory to the heap from which
   // it was created.
-  class Image : public ImageCore{
+  class Image : public ImageCore {
    public:
     ~Image() { heap_->FreeMemory(token_); }
     ::VkDeviceSize size() const;
@@ -312,37 +312,40 @@ class VulkanApplication {
    private:
     friend class ::vulkan::VulkanApplication;
     Image(VulkanArena* heap, AllocationToken* token, VkImage&& image,
-          VkFormat format)
+          VkFormat format, uint32_t device_mask)
         : ImageCore(std::move(image), format),
           heap_(heap),
-          token_(token){}
+          token_(token),
+          device_mask_(device_mask)
+    {}
     VulkanArena* heap_;
     AllocationToken* token_;
+    uint32_t device_mask_;
   };
 
   // The SparseImage class holds onto a VkImage as well as the memories that
   // are sparsely bound to it. It will return the memory to the heap from
   // which it was bound.
-  class SparseImage : public ImageCore{
-    public:
-      ~SparseImage() {
-        for (const auto &ti : tokens_) {
-          heap_->FreeMemory(ti);
-        }
+  class SparseImage : public ImageCore {
+   public:
+    ~SparseImage() {
+      for (const auto& ti : tokens_) {
+        heap_->FreeMemory(ti);
       }
-      ::VkDeviceSize size() const;
+    }
+    ::VkDeviceSize size() const;
 
-    private:
-      friend class ::vulkan::VulkanApplication;
-      SparseImage(VulkanArena* heap,
-                  containers::vector<AllocationToken*>&& tokens,
-                  VkImage&& image, VkFormat format)
-          : ImageCore(std::move(image), format),
-            heap_(heap),
-            tokens_(std::move(tokens)) {}
+   private:
+    friend class ::vulkan::VulkanApplication;
+    SparseImage(VulkanArena* heap,
+                containers::vector<AllocationToken*>&& tokens, VkImage&& image,
+                VkFormat format)
+        : ImageCore(std::move(image), format),
+          heap_(heap),
+          tokens_(std::move(tokens)) {}
 
-      VulkanArena* heap_;
-      containers::vector<AllocationToken*> tokens_;
+    VulkanArena* heap_;
+    containers::vector<AllocationToken*> tokens_;
   };
 
   // The buffer class holds onto a VkBuffer. If this buffer was created
@@ -396,7 +399,8 @@ class VulkanApplication {
         ::VkDeviceSize offset, ::VkDeviceSize size,
         LazyDeviceFunction<PFN_vkFlushMappedMemoryRanges>* flush_memory_range,
         LazyDeviceFunction<PFN_vkInvalidateMappedMemoryRanges>*
-            invalidate_memory_range)
+            invalidate_memory_range,
+        uint32_t device_mask)
         : base_address_(base_address),
           heap_(heap),
           token_(token),
@@ -406,7 +410,8 @@ class VulkanApplication {
           offset_(offset),
           size_(size),
           flush_memory_range_(flush_memory_range),
-          invalidate_memory_range_(invalidate_memory_range) {}
+          invalidate_memory_range_(invalidate_memory_range),
+         device_mask_(device_mask) {}
     char* base_address_;
     VulkanArena* heap_;
     AllocationToken* token_;
@@ -415,6 +420,7 @@ class VulkanApplication {
     ::VkDeviceMemory memory_;
     ::VkDeviceSize offset_;
     ::VkDeviceSize size_;
+    uint32_t device_mask_;
     LazyDeviceFunction<PFN_vkFlushMappedMemoryRanges>* flush_memory_range_;
     LazyDeviceFunction<PFN_vkInvalidateMappedMemoryRanges>*
         invalidate_memory_range_;
@@ -435,17 +441,19 @@ class VulkanApplication {
                     uint32_t device_buffer_size = 1024 * 128,
                     uint32_t coherent_buffer_size = 1024 * 128,
                     bool use_async_compute_queue = false,
-                    bool use_sparse_binding = false);
+                    bool use_sparse_binding = false,
+                    bool use_device_groups = false);
 
   // Creates an image from the given create_info, and binds memory from the
   // device-only image Arena.
   containers::unique_ptr<Image> CreateAndBindImage(
-      const VkImageCreateInfo* create_info);
+      const VkImageCreateInfo* create_info, uint32_t device_mask = 0);
   // Creates an sparse bound image from the given create_info, and binds memory
   // from the device-only image arena. The size of the binding block is the
   // given |slice_size| roundup to the image's memory alignment.
   containers::unique_ptr<SparseImage> CreateAndBindSparseImage(
-      const VkImageCreateInfo* create_info, size_t slice_size);
+      const VkImageCreateInfo* create_info, size_t slice_size,
+      uint32_t device_mask = 0);
   // Create an image view for the given image, with the same format of the
   // given image and the given image view type, subresource range.
   containers::unique_ptr<VkImageView> CreateImageView(
@@ -454,30 +462,30 @@ class VulkanApplication {
   // Creates a buffer from the given create_info, and binds memory from the
   // host-visible buffer Arena. Also maps the memory needed for the device.
   containers::unique_ptr<Buffer> CreateAndBindHostBuffer(
-      const VkBufferCreateInfo* create_info);
+      const VkBufferCreateInfo* create_info, uint32_t device_mask = 0);
   // Creates a buffer from the given create_info, and binds memory from the
   // host-coherent buffer arena. Also maps the memory needed for the device.
   containers::unique_ptr<Buffer> CreateAndBindCoherentBuffer(
-      const VkBufferCreateInfo* create_info);
+      const VkBufferCreateInfo* create_info, uint32_t device_mask = 0);
   // Creates a buffer with the given size, usage flags from the host-visible
   // buffer Arena. The buffer is create with VkBufferCreateFlags set to 0,
   // VkSharingMode set to VK_SHARING_MODE_EXCLUSIVE.
   containers::unique_ptr<Buffer> CreateAndBindDefaultExclusiveHostBuffer(
-      VkDeviceSize size, VkBufferUsageFlags usages);
+      VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask = 0);
   // Creates a buffer with the given size, usage flags from the host-coherent
   // buffer Arena. The buffer is create with VkBufferCreateFlags set to 0,
   // VkSharingMode set to VK_SHARING_MODE_EXCLUSIVE.
   containers::unique_ptr<Buffer> CreateAndBindDefaultExclusiveCoherentBuffer(
-      VkDeviceSize size, VkBufferUsageFlags usages);
+      VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask = 0);
   // Creates a buffer from the given create_info, and binds memory from the
   // device-only-accessible buffer Arena.
   containers::unique_ptr<Buffer> CreateAndBindDeviceBuffer(
-      const VkBufferCreateInfo* create_info);
+      const VkBufferCreateInfo* create_info, uint32_t device_mask = 0);
   // Creates a buffer with the given size, usage flags from the device-only
   // buffer Arena. The buffer is create with VkBufferCreateFlags set to 0,
   // VkSharingMode set to VK_SHARING_MODE_EXCLUSIVE.
   containers::unique_ptr<Buffer> CreateAndBindDefaultExclusiveDeviceBuffer(
-      VkDeviceSize size, VkBufferUsageFlags usages);
+      VkDeviceSize size, VkBufferUsageFlags usages, uint32_t device_mask = 0);
   // Create a buffer view for the given buffer, with the same format of the
   // given buffer and the given buffer view offset and range.
   containers::unique_ptr<VkBufferView> CreateBufferView(::VkBuffer buffer,
@@ -748,7 +756,8 @@ class VulkanApplication {
 
  private:
   containers::unique_ptr<Buffer> CreateAndBindBuffer(
-      VulkanArena* heap, const VkBufferCreateInfo* create_info);
+      VulkanArena* heap, const VkBufferCreateInfo* create_info,
+      uint32_t device_mask);
 
   // Intended to be called by the constructor to create the device, since
   // VkDevice does not have a default constructor.
@@ -756,6 +765,16 @@ class VulkanApplication {
                         const VkPhysicalDeviceFeatures& features,
                         bool create_async_compute_queue,
                         bool use_sparse_binding);
+
+  VkDevice SetupDevice(VkDevice device, bool create_async_compute_queue,
+                       bool use_sparse_binding);
+
+  // Intended to be called by the constructor to create the device, since
+  // VkDevice does not have a default constructor.
+  VkDevice CreateDeviceGroup(
+      const std::initializer_list<const char*> extensions,
+      const VkPhysicalDeviceFeatures& features, bool create_async_compute_queue,
+      bool use_sparse_binding);
 
   containers::Allocator* allocator_;
   logging::Logger* log_;
@@ -801,7 +820,8 @@ inline containers::vector<uint32_t> GetHostVisibleBufferData(
 
 using BufferPointer = containers::unique_ptr<VulkanApplication::Buffer>;
 using ImagePointer = containers::unique_ptr<VulkanApplication::Image>;
-using SparseImagePointer = containers::unique_ptr<VulkanApplication::SparseImage>;
+using SparseImagePointer =
+    containers::unique_ptr<VulkanApplication::SparseImage>;
 }  // namespace vulkan
 
 #endif  // VULKAN_HELPERS_VULKAN_APPLICATION

@@ -30,7 +30,7 @@ layout (binding = 0) buffer time_data {
 const float G = 6.67408e-11;
 const float MASS_PER_PARTICLE = float(TOTAL_MASS) / float(TOTAL_PARTICLES);
 
-#define PARTICLE_SPLIT 16392
+#define PARTICLE_SPLIT 1024
 
 // This is going to be REALLY inefficient once we
 // actually try to do the n-body.
@@ -47,7 +47,7 @@ void main() {
     if (idx != gl_GlobalInvocationID.x) {
       Vector2 direction = simulation[idx].position_velocity.xy - sim.position_velocity.xy;
       float lensq = dot(direction, direction);
-      float a = G * (MASS_PER_PARTICLE*MASS_PER_PARTICLE * PARTICLE_SPLIT)/ lensq;
+      float a = G * (MASS_PER_PARTICLE*MASS_PER_PARTICLE)/ lensq;
       total_acceleration += direction * a;
     }
   }

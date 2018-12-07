@@ -70,7 +70,8 @@ class InstanceFunctions {
 #elif defined _WIN32
         ,
         CONSTRUCT_LAZY_FUNCTION(vkCreateWin32SurfaceKHR),
-        CONSTRUCT_LAZY_FUNCTION(vkGetPhysicalDeviceWin32PresentationSupportKHR)
+        CONSTRUCT_LAZY_FUNCTION(vkGetPhysicalDeviceWin32PresentationSupportKHR),
+        CONSTRUCT_LAZY_FUNCTION(vkEnumeratePhysicalDeviceGroups)
 #endif
 #undef CONSTRUCT_LAZY_FUNCTION
   {
@@ -116,6 +117,7 @@ class InstanceFunctions {
 #elif defined _WIN32
   LAZY_FUNCTION(vkCreateWin32SurfaceKHR);
   LAZY_FUNCTION(vkGetPhysicalDeviceWin32PresentationSupportKHR);
+  LAZY_FUNCTION(vkEnumeratePhysicalDeviceGroups)
 #endif
 #undef LAZY_FUNCTION
 };
@@ -311,6 +313,7 @@ class DeviceFunctions {
         CONSTRUCT_LAZY_FUNCTION(vkAllocateMemory),
         CONSTRUCT_LAZY_FUNCTION(vkFreeMemory),
         CONSTRUCT_LAZY_FUNCTION(vkBindImageMemory),
+        CONSTRUCT_LAZY_FUNCTION(vkBindImageMemory2),
         CONSTRUCT_LAZY_FUNCTION(vkCreateShaderModule),
         CONSTRUCT_LAZY_FUNCTION(vkDestroyShaderModule),
         CONSTRUCT_LAZY_FUNCTION(vkCreateSampler),
@@ -323,6 +326,7 @@ class DeviceFunctions {
         CONSTRUCT_LAZY_FUNCTION(vkMapMemory),
         CONSTRUCT_LAZY_FUNCTION(vkUnmapMemory),
         CONSTRUCT_LAZY_FUNCTION(vkBindBufferMemory),
+        CONSTRUCT_LAZY_FUNCTION(vkBindBufferMemory2),
         CONSTRUCT_LAZY_FUNCTION(vkCreateDescriptorPool),
         CONSTRUCT_LAZY_FUNCTION(vkResetDescriptorPool),
         CONSTRUCT_LAZY_FUNCTION(vkDestroyDescriptorPool),
@@ -411,6 +415,7 @@ class DeviceFunctions {
   LAZY_FUNCTION(vkAllocateMemory);
   LAZY_FUNCTION(vkFreeMemory);
   LAZY_FUNCTION(vkBindImageMemory);
+  LAZY_FUNCTION(vkBindImageMemory2);
   LAZY_FUNCTION(vkCreateShaderModule);
   LAZY_FUNCTION(vkDestroyShaderModule);
   LAZY_FUNCTION(vkCreateSampler);
@@ -423,6 +428,7 @@ class DeviceFunctions {
   LAZY_FUNCTION(vkMapMemory)
   LAZY_FUNCTION(vkUnmapMemory);
   LAZY_FUNCTION(vkBindBufferMemory);
+  LAZY_FUNCTION(vkBindBufferMemory2);
   LAZY_FUNCTION(vkCreateDescriptorPool);
   LAZY_FUNCTION(vkResetDescriptorPool);
   LAZY_FUNCTION(vkDestroyDescriptorPool);
